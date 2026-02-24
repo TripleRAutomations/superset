@@ -14,7 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-from typing import Optional, TypedDict, Union
+from typing import Any, Dict, Optional, TypedDict, Union
 
 from flask_appbuilder.security.sqla.models import Group, Role
 from flask_login import AnonymousUserMixin
@@ -26,6 +26,7 @@ class GuestTokenUser(TypedDict, total=False):
     username: str
     first_name: str
     last_name: str
+    attributes: Optional[Dict[str, Any]]
 
 
 class GuestTokenResourceType(StrEnum):
@@ -59,7 +60,8 @@ class GuestUser(AnonymousUserMixin):
     """
 
     is_guest_user = True
-    active = True
+    # FAB 5.0 renamed active to is_active, keeping both for backwards compatibility
+    active = is_active = True
 
     @property
     def is_authenticated(self) -> bool:

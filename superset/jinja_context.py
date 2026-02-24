@@ -28,8 +28,8 @@ from typing import Any, Callable, cast, TYPE_CHECKING, TypedDict, Union
 import dateutil
 from flask import current_app, g, has_request_context, request
 from flask_babel import gettext as _
-from jinja2 import DebugUndefined, Environment, TemplateSyntaxError
-from jinja2.exceptions import SecurityError, UndefinedError
+from jinja2 import DebugUndefined, Environment, TemplateSyntaxError, UndefinedError
+from jinja2.exceptions import SecurityError
 from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.sql.expression import bindparam
@@ -46,6 +46,7 @@ from superset.exceptions import (
 )
 from superset.extensions import feature_flag_manager
 from superset.sql.parse import Table
+from superset.superset_typing import Column, QueryObjectDict
 from superset.utils import json
 from superset.utils.core import (
     AdhocFilterClause,
@@ -64,6 +65,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+class UndefinedTemplateFunctionException(SupersetTemplateException):
+    """Raised when an undefined function-like Jinja identifier is encountered."""
+
+    pass
+
+
 NONE_TYPE = type(None).__name__
 ALLOWED_TYPES = (
     NONE_TYPE,
@@ -80,6 +88,11 @@ ALLOWED_TYPES = (
     "TimeFilter",
 )
 COLLECTION_TYPES = ("list", "dict", "tuple", "set")
+
+# Type alias for JSON-native types
+JsonValue = Union[
+    str, int, float, bool, list["JsonValue"], dict[str, "JsonValue"], None
+]
 
 
 @lru_cache(maxsize=LRU_CACHE_MAX_SIZE)
@@ -120,7 +133,8 @@ class ExtraCache:
         r"current_user_rls_rules\([^()]*\)|"
         r"current_user_roles\([^()]*\)|"
         r"cache_key_wrapper\([^()]*\)|"
-        r"url_param\([^()]*\)"
+        r"url_param\([^()]*\)|"
+        r"get_guest_user_attribute\([^()]*\)|"
         r")"
         r"[^{}]*?(\}\}|\%\})"
     )
@@ -291,6 +305,75 @@ class ExtraCache:
         if add_to_cache_keys:
             self.cache_key_wrapper(result)
         return result
+
+    def get_guest_user_attribute(
+        self,
+        attribute_name: str,
+        default: JsonValue = None,
+        add_to_cache_keys: bool = True,
+    ) -> JsonValue:
+        """
+        Get a specific user attribute from guest user.
+
+        This function retrieves attributes from the guest user token and supports
+        all JSON-native types (string, number, boolean, array, object, null).
+
+        Args:
+            attribute_name: Name of the attribute to retrieve
+            default: Default value if attribute not found (can be any JSON-native type)
+            add_to_cache_keys: Whether the value should be included in the cache key
+
+        Returns:
+            The attribute value from the guest user token, or the default value.
+            Can be any JSON-native type: string, number, boolean, array, object, or
+            null.
+
+        Examples:
+            {{ get_guest_user_attribute('department') }}  # Returns: "Engineering"
+            {{ get_guest_user_attribute('is_admin') }}    # Returns: True
+            {{ get_guest_user_attribute('permissions') }} # Returns: ["read", "write"]
+            {{ get_guest_user_attribute('config') }}      # Returns: {"theme": "dark"}
+            {{ get_guest_user_attribute('missing', 'default') }} # Returns: "default"
+        """
+
+        # Check if we have a request context and user
+        if not has_request_context():
+            return default
+
+        if not hasattr(g, "user") or g.user is None:
+            return default
+
+        user = g.user
+
+        # Check if current user is a guest user
+        if not (hasattr(user, "is_guest_user") and user.is_guest_user):
+            return default
+
+        # Get attributes from guest token
+        if hasattr(user, "guest_token") and user.guest_token:
+            token = user.guest_token
+            # ensure token is a mapping before calling .get
+            if not isinstance(token, dict):
+                return default
+            token_user = token.get("user", {})
+            if not isinstance(token_user, dict):
+                return default
+            user_attributes = token_user.get("attributes") or {}
+
+            # Only add to cache key if the variable actually exists in guest token
+            if attribute_name in user_attributes:
+                result = user_attributes[attribute_name]
+                if add_to_cache_keys and result is not None:
+                    # Use json.dumps for consistent serialization of all types
+                    cache_value = json.dumps(result, sort_keys=True)
+                    self.cache_key_wrapper(
+                        f"guest_user_attribute:{attribute_name}:{cache_value}"
+                    )
+                return result
+            else:
+                return default
+
+        return default
 
     def filter_values(
         self, column: str, default: str | None = None, remove_filter: bool = False
@@ -767,6 +850,14 @@ class BaseTemplateProcessor:
             raise SupersetTemplateException(
                 "Infinite recursion detected in template"
             ) from ex
+        except UndefinedError as ex:
+            match = re.search(r'["\']([^"\']+)["\']\s+is undefined', str(ex))
+            undefined_name = match.group(1) if match else None
+            if undefined_name and re.search(
+                r"\{\{\s*(?:[\w\.]*\.)?" + re.escape(undefined_name) + r"\s*\(", sql
+            ):
+                raise UndefinedTemplateFunctionException(str(ex)) from ex
+            raise
 
 
 class JinjaTemplateProcessor(BaseTemplateProcessor):
@@ -830,6 +921,9 @@ class JinjaTemplateProcessor(BaseTemplateProcessor):
                 "get_filters": partial(safe_proxy, extra_cache.get_filters),
                 "dataset": partial(safe_proxy, dataset_macro_with_context),
                 "get_time_filter": partial(safe_proxy, extra_cache.get_time_filter),
+                "get_guest_user_attribute": partial(
+                    safe_proxy, extra_cache.get_guest_user_attribute
+                ),
             }
         )
 
@@ -1007,11 +1101,11 @@ def dataset_macro(
 
     columns = columns or [column.column_name for column in dataset.columns]
     metrics = [metric.metric_name for metric in dataset.metrics]
-    query_obj = {
+    query_obj: QueryObjectDict = {
         "is_timeseries": False,
         "filter": [],
         "metrics": metrics if include_metrics else None,
-        "columns": columns,
+        "columns": cast(list[Column], columns),
         "from_dttm": from_dttm,
         "to_dttm": to_dttm,
     }
