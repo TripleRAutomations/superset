@@ -165,9 +165,49 @@ class SupersetUserApi(UserApi):
 
     def pre_delete(self, item: Model) -> None:
         """
-        Overriding this method to be able to delete items when they have constraints
+        Clear every reference to the user that would otherwise block the DELETE
+        with a foreign-key violation.
+
+        FAB only removes the user's roles/groups, but Superset references
+        ``ab_user`` from many tables: the ``created_by_fk`` / ``changed_by_fk``
+        audit columns on every ``AuditMixinNullable`` model, plus a handful of
+        direct ``user_id`` columns (logs, saved queries, ``key_value``, ...).
+        Foreign keys declared ``ON DELETE CASCADE`` are handled by the database;
+        the rest are not, so we clear them here before the row is removed.
+        Nullable references are set to ``NULL``; non-nullable ones have their
+        rows deleted.
         """
         item.roles = []
+        if hasattr(item, "groups"):
+            item.groups = []
+
+        session = self.datamodel.session
+        user_id = item.id
+
+        for table in item.__table__.metadata.sorted_tables:
+            # FAB owns the ab_* tables; roles/groups are cleared above.
+            if table.name.startswith("ab_"):
+                continue
+            for column in table.columns:
+                user_fks = [
+                    fk
+                    for fk in column.foreign_keys
+                    if fk.column.table.name == "ab_user"
+                    and fk.column.name == "id"
+                ]
+                if not user_fks:
+                    continue
+                # The database cleans up cascading references on its own.
+                if any(fk.ondelete == "CASCADE" for fk in user_fks):
+                    continue
+                if column.nullable:
+                    session.execute(
+                        table.update()
+                        .where(column == user_id)
+                        .values({column.name: None})
+                    )
+                else:
+                    session.execute(table.delete().where(column == user_id))
 
 
 PermissionViewModelView.list_widget = SupersetSecurityListWidget
