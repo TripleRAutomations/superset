@@ -1,0 +1,8 @@
+# Thin overlay: bake the fixed superset_config.py onto an already-built :reports*
+# image. COPY-only -> no code executes -> no QEMU emulation needed to produce an
+# amd64 image on an arm64 host. Pass the base tag to rebase, e.g.
+#   docker build --platform linux/amd64 -f mcp-deploy/Dockerfile.configfix \
+#     --build-arg BASE_TAG=reports8 -t <ecr>/superset/prod:reports9 .
+ARG BASE_TAG=reports8
+FROM 767397765406.dkr.ecr.eu-central-1.amazonaws.com/superset/prod:${BASE_TAG}
+COPY --chown=superset:superset docker/pythonpath_prod/superset_config.py /app/pythonpath/superset_config.py

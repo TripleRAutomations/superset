@@ -1,0 +1,32 @@
+{
+  "family": "superset-mcp",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::767397765406:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "superset-mcp",
+      "image": "767397765406.dkr.ecr.eu-central-1.amazonaws.com/superset-mcp:0.2.7",
+      "essential": true,
+      "portMappings": [{ "containerPort": 8001, "protocol": "tcp" }],
+      "environment": [
+        { "name": "SUPERSET_BASE_URL", "value": "https://baw-superset.kwsdcloud.eu" },
+        { "name": "SUPERSET_AUTH_PROVIDER", "value": "db" },
+        { "name": "SUPERSET_USERNAME", "value": "mcp-service" }
+      ],
+      "secrets": [
+        { "name": "SUPERSET_PASSWORD", "valueFrom": "arn:aws:secretsmanager:eu-central-1:767397765406:secret:superset/mcp/password-i9pkbA" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/superset-ecr-init",
+          "awslogs-region": "eu-central-1",
+          "awslogs-stream-prefix": "mcp"
+        }
+      }
+    }
+  ]
+}

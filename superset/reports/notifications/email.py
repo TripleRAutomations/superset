@@ -99,15 +99,19 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
 
     def _error_template(self, text: str) -> str:
         call_to_action = self._get_call_to_action()
+        cta_html = (
+            f'<p><b><a href="{self._content.url}">{call_to_action}</a></b></p>'
+            if call_to_action
+            else ""
+        )
         return __(
             """
             <p>Your report/alert was unable to be generated because of the following error: %(text)s</p>
             <p>Please check your dashboard/chart for errors.</p>
-            <p><b><a href="%(url)s">%(call_to_action)s</a></b></p>
+            %(cta_html)s
             """,  # noqa: E501
             text=text,
-            url=self._content.url,
-            call_to_action=call_to_action,
+            cta_html=cta_html,
         )
 
     def _get_content(self) -> EmailContent:
@@ -157,6 +161,11 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
             )
         img_tag = "".join(img_tags)
         call_to_action = self._get_call_to_action()
+        cta_html = (
+            f'<b><a href="{self._content.url}">{call_to_action}</a></b><p></p>'
+            if call_to_action
+            else ""
+        )
         body = textwrap.dedent(
             f"""
             <html>
@@ -177,7 +186,7 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
               <body>
                 <div>{description}</div>
                 <br>
-                <b><a href="{self._content.url}">{call_to_action}</a></b><p></p>
+                {cta_html}
                 {html_table}
                 {img_tag}
               </body>
@@ -215,7 +224,8 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
         return self.now.strftime(name)
 
     def _get_call_to_action(self) -> str:
-        return __(current_app.config["EMAIL_REPORTS_CTA"])
+        cta = current_app.config["EMAIL_REPORTS_CTA"]
+        return __(cta) if cta else ""
 
     def _get_to(self) -> str:
         return json.loads(self._recipient.recipient_config_json)["target"]

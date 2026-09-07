@@ -30,6 +30,9 @@ from cachelib.redis import RedisCache
 
 from typing import Literal
 
+from superset_bearer_request_loader import BearerAuthSecurityManager
+CUSTOM_SECURITY_MANAGER = BearerAuthSecurityManager
+
 SESSION_COOKIE_SAMESITE: Literal["None", "Lax", "Strict"] = "None"
 
 logger = logging.getLogger()
@@ -99,14 +102,24 @@ THUMBNAIL_CACHE_CONFIG = {**CACHE_CONFIG, "CACHE_KEY_PREFIX": "superset_thumb_"}
 
 
 class CeleryConfig:
-    broker_url = f"rediss://{REDIS_HOST}:{REDIS_PORT}/{REDIS_CELERY_DB}"
+    broker_url = f"rediss://{REDIS_HOST}:{REDIS_PORT}/{REDIS_CELERY_DB}?ssl_cert_reqs=CERT_NONE"
     imports = (
         "superset.sql_lab",
         "superset.tasks.scheduler",
         "superset.tasks.thumbnails",
         "superset.tasks.cache",
     )
-    result_backend = f"rediss://{REDIS_HOST}:{REDIS_PORT}/{REDIS_RESULTS_DB}"
+    result_backend = f"rediss://{REDIS_HOST}:{REDIS_PORT}/{REDIS_RESULTS_DB}?ssl_cert_reqs=CERT_NONE"
+    # ElastiCache Serverless runs Redis in CLUSTER mode. Force every Celery/kombu key
+    # into a single hash slot via the {superset} hash tag, so multi-key operations
+    # (broker unacked handling, etc.) don't raise "CROSSSLOT Keys ... don't hash to
+    # the same slot". Combined with the worker's --without-mingle/--without-gossip.
+    broker_transport_options = {"global_keyprefix": "{superset}"}
+    result_backend_transport_options = {"global_keyprefix": "{superset}"}
+    # The worker remote-control mailbox uses pattern pub/sub (PSUBSCRIBE), which
+    # ElastiCache Serverless (cluster mode) rejects. Reports/alerts don't need
+    # celery inspect/control, so disable the pidbox.
+    worker_enable_remote_control = False
     worker_prefetch_multiplier = 1
     task_acks_late = False
     beat_schedule = {
@@ -132,8 +145,12 @@ FEATURE_FLAGS = {
     "DASHBOARD_RBAC": True,
     "ENABLE_TEMPLATE_PROCESSING": True,
     "DASHBOARD_CROSS_FILTERS": True,
-    "DISABLE_EMBEDDED_SUPERSET_LOGOUT": True
-
+    "DISABLE_EMBEDDED_SUPERSET_LOGOUT": True,
+    # Alerts & Reports: use Playwright/Chromium for screenshots (image built with
+    # --build-arg INCLUDE_CHROMIUM=true) and expose the screenshot API for the
+    # app-side export button.
+    "PLAYWRIGHT_REPORTS_AND_THUMBNAILS": True,
+    "ENABLE_DASHBOARD_SCREENSHOT_ENDPOINTS": True,
 }
 
 SUPERSET_FEATURE_EMBEDDED_SUPERSET=True
@@ -210,13 +227,60 @@ SESSION_COOKIE_HTTPONLY = True
 ###
 CELERY_CONFIG = CeleryConfig
 
-#FEATURE_FLAGS = {"ALERT_REPORTS": True}
-ALERT_REPORTS_NOTIFICATION_DRY_RUN = True
-WEBDRIVER_BASEURL = f"http://superset_app{os.environ.get('SUPERSET_APP_ROOT', '/')}/"  # When using docker compose baseurl should be http://superset_nginx{ENV{BASEPATH}}/  # noqa: E501
-# The base URL for the email report hyperlinks.
-WEBDRIVER_BASEURL_USER_FRIENDLY = (
-    f"http://localhost:8888/{os.environ.get('SUPERSET_APP_ROOT', '/')}/"
-)
+# Alerts & Reports must actually deliver in production (was DRY_RUN=True).
+ALERT_REPORTS_NOTIFICATION_DRY_RUN = False
+
+# --- Headless screenshot tuning ---
+# ROOT CAUSE of blank report/thumbnail screenshots: the dashboard renders fine in
+# headless Chromium, but page.screenshot(full_page=True) only captures what has
+# painted INSIDE the viewport — a tall dashboard's off-viewport charts never paint,
+# so the capture comes out blank. FIX = Superset's built-in TILED screenshots,
+# which scroll the viewport in tiles and stitch them so every chart paints. The
+# default thresholds (20 charts / 5000px) sit just above Executive Overview
+# (17 charts / 4490px), so we lower them so tiling triggers for it.
+SCREENSHOT_TILED_ENABLED = True
+SCREENSHOT_TILED_HEIGHT_THRESHOLD = 2000   # tile any dashboard taller than the viewport (default 5000)
+SCREENSHOT_TILED_CHART_THRESHOLD = 10      # ...or with >= 10 charts (default 20)
+
+# Waits kept modest — they were never the cause (the page paints fine); larger
+# values only slow every report. These are the pre-existing values.
+SCREENSHOT_PLAYWRIGHT_WAIT_EVENT = "load"
+SCREENSHOT_SELENIUM_HEADSTART = 5          # settle after navigation (default 3)
+SCREENSHOT_SELENIUM_ANIMATION_WAIT = 10    # give ECharts time to paint to canvas (default 5)
+SCREENSHOT_PLAYWRIGHT_DEFAULT_TIMEOUT = 120000   # ms; headroom for the multi-capture tiled path (default 30000)
+# NOTE: SCREENSHOT_REPLACE_UNEXPECTED_ERRORS is intentionally left False — its
+# find_unexpected_errors() alert-expansion is broken in this Superset build
+# (60s Playwright timeout) and disturbs the page right before capture.
+
+# Chromium launch flags for the headless report/thumbnail renderer. The default
+# is just ["--headless"], which is missing the flags needed to render reliably
+# inside a container: without --disable-dev-shm-usage, Fargate's small /dev/shm
+# fills up and Chromium intermittently fails to load JS chunks (ChunkLoadError).
+WEBDRIVER_OPTION_ARGS = [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+]
+
+# The Celery worker renders screenshots and builds email links against these — they
+# must be real, reachable hostnames (NOT the docker-compose "superset_app" default).
+WEBDRIVER_BASEURL = "https://baw-superset.kwsdcloud.eu/"
+WEBDRIVER_BASEURL_USER_FRIENDLY = "https://baw-superset.kwsdcloud.eu/"
+
+# --- SMTP via AWS SES (eu-central-1); SMTP_USER/PASSWORD come from secret superset-8NKjy1 ---
+SMTP_HOST = os.getenv("SMTP_HOST", "email-smtp.eu-central-1.amazonaws.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_STARTTLS = True
+SMTP_SSL = False
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_MAIL_FROM = os.getenv("SMTP_MAIL_FROM", "reports@kwsdcloud.eu")
+EMAIL_REPORTS_SUBJECT_PREFIX = "[BAW Report] "
+EMAIL_REPORTS_CTA = ""   # portal users cannot log in to Superset, so no link in emails
+
+# --- Metadata DB pool hygiene (t3.small has headroom; just keep connections fresh) ---
+SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True, "pool_recycle": 300}
 SQLLAB_CTAS_NO_LIMIT = True
 
 log_level_text = os.getenv("SUPERSET_LOG_LEVEL", "INFO")

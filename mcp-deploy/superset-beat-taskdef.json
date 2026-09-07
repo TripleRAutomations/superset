@@ -1,0 +1,93 @@
+{
+  "family": "superset-beat",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "2048",
+  "memory": "8192",
+  "executionRoleArn": "arn:aws:iam::767397765406:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::767397765406:role/superset-ecr-taskrole",
+  "containerDefinitions": [
+    {
+      "name": "superset-beat",
+      "image": "767397765406.dkr.ecr.eu-central-1.amazonaws.com/superset/prod:reports4",
+      "essential": true,
+      "command": [
+        "sh",
+        "-c",
+        "celery --app=superset.tasks.celery_app:app beat -l INFO --schedule /tmp/celerybeat-schedule --pidfile /tmp/celerybeat.pid"
+      ],
+      "environment": [
+        {
+          "name": "REDIS_HOST",
+          "value": "superset-cache-orgadd.serverless.euc1.cache.amazonaws.com"
+        },
+        {
+          "name": "DATABASE_DIALECT",
+          "value": "postgresql"
+        },
+        {
+          "name": "REDIS_PORT",
+          "value": "6379"
+        },
+        {
+          "name": "DATABASE_HOST",
+          "value": "superset-metadata-db.ct4y62gactqk.eu-central-1.rds.amazonaws.com"
+        },
+        {
+          "name": "REDIS_RESULTS_DB",
+          "value": "0"
+        },
+        {
+          "name": "DATABASE_PORT",
+          "value": "5432"
+        },
+        {
+          "name": "SUPERSET_ENV",
+          "value": "production"
+        },
+        {
+          "name": "SUPERSET_LOAD_EXAMPLES",
+          "value": "no"
+        },
+        {
+          "name": "DATABASE_DB",
+          "value": "postgres"
+        },
+        {
+          "name": "DATABASE_USER",
+          "value": "postgres"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_PASSWORD",
+          "valueFrom": "arn:aws:secretsmanager:eu-central-1:767397765406:secret:superset-8NKjy1:DATABASE_PASSWORD::"
+        },
+        {
+          "name": "SUPERSET_SECRET_KEY",
+          "valueFrom": "arn:aws:secretsmanager:eu-central-1:767397765406:secret:superset-8NKjy1:SECRET_KEY::"
+        },
+        {
+          "name": "SMTP_USER",
+          "valueFrom": "arn:aws:secretsmanager:eu-central-1:767397765406:secret:superset-8NKjy1:SMTP_USER::"
+        },
+        {
+          "name": "SMTP_PASSWORD",
+          "valueFrom": "arn:aws:secretsmanager:eu-central-1:767397765406:secret:superset-8NKjy1:SMTP_PASSWORD::"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/superset-ecr-init",
+          "awslogs-create-group": "true",
+          "awslogs-region": "eu-central-1",
+          "awslogs-stream-prefix": "beat"
+        },
+        "secretOptions": []
+      }
+    }
+  ]
+}

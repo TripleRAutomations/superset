@@ -227,6 +227,7 @@ RUN --mount=type=cache,target=${SUPERSET_HOME}/.cache/uv \
 RUN python -m compileall /app/superset
 
 COPY --chown=superset:superset docker/pythonpath_prod/superset_config.py /app/pythonpath/superset_config.py
+COPY --chown=superset:superset docker/pythonpath_prod/superset_bearer_request_loader.py /app/pythonpath/superset_bearer_request_loader.py
 
 USER superset
 

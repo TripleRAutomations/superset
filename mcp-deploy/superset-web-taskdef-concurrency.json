@@ -1,0 +1,138 @@
+{
+  "containerDefinitions": [
+    {
+      "name": "superset",
+      "image": "767397765406.dkr.ecr.eu-central-1.amazonaws.com/superset/prod:reports4",
+      "cpu": 1024,
+      "portMappings": [
+        {
+          "containerPort": 8088,
+          "hostPort": 8088,
+          "protocol": "tcp",
+          "name": "superset-8088-tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "essential": true,
+      "entryPoint": [
+        "sh",
+        "-c"
+      ],
+      "command": [
+        "/usr/bin/run-server.sh"
+      ],
+      "environment": [
+        {
+          "name": "REDIS_HOST",
+          "value": "superset-cache-orgadd.serverless.euc1.cache.amazonaws.com"
+        },
+        {
+          "name": "DATABASE_DIALECT",
+          "value": "postgresql"
+        },
+        {
+          "name": "REDIS_PORT",
+          "value": "6379"
+        },
+        {
+          "name": "DATABASE_HOST",
+          "value": "superset-metadata-db.ct4y62gactqk.eu-central-1.rds.amazonaws.com"
+        },
+        {
+          "name": "REDIS_RESULTS_DB",
+          "value": "0"
+        },
+        {
+          "name": "DATABASE_PORT",
+          "value": "5432"
+        },
+        {
+          "name": "SUPERSET_ENV",
+          "value": "production"
+        },
+        {
+          "name": "SUPERSET_LOAD_EXAMPLES",
+          "value": "no"
+        },
+        {
+          "name": "DATABASE_DB",
+          "value": "postgres"
+        },
+        {
+          "name": "DATABASE_USER",
+          "value": "postgres"
+        },
+        {
+          "name": "SERVER_WORKER_AMOUNT",
+          "value": "4"
+        },
+        {
+          "name": "SERVER_WORKER_CLASS",
+          "value": "gthread"
+        },
+        {
+          "name": "SERVER_THREADS_AMOUNT",
+          "value": "20"
+        },
+        {
+          "name": "GUNICORN_TIMEOUT",
+          "value": "120"
+        },
+        {
+          "name": "WORKER_MAX_REQUESTS",
+          "value": "5000"
+        },
+        {
+          "name": "WORKER_MAX_REQUESTS_JITTER",
+          "value": "500"
+        },
+        {
+          "name": "GUNICORN_KEEPALIVE",
+          "value": "75"
+        }
+      ],
+      "mountPoints": [],
+      "volumesFrom": [],
+      "secrets": [
+        {
+          "name": "DATABASE_PASSWORD",
+          "valueFrom": "arn:aws:secretsmanager:eu-central-1:767397765406:secret:superset-8NKjy1:DATABASE_PASSWORD::"
+        },
+        {
+          "name": "SUPERSET_SECRET_KEY",
+          "valueFrom": "arn:aws:secretsmanager:eu-central-1:767397765406:secret:superset-8NKjy1:SECRET_KEY::"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/superset-ecr-init",
+          "awslogs-create-group": "true",
+          "awslogs-region": "eu-central-1",
+          "awslogs-stream-prefix": "ecs"
+        },
+        "secretOptions": []
+      },
+      "systemControls": []
+    }
+  ],
+  "family": "superset-ecr-init",
+  "taskRoleArn": "arn:aws:iam::767397765406:role/superset-ecr-taskrole",
+  "executionRoleArn": "arn:aws:iam::767397765406:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "volumes": [],
+  "placementConstraints": [],
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "2048",
+  "memory": "8192",
+  "ephemeralStorage": {
+    "sizeInGiB": 40
+  },
+  "enableFaultInjection": false
+}
